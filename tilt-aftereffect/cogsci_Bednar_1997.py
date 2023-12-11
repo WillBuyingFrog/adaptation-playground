@@ -12,9 +12,9 @@ import frogtools
 # --------
 
 # 定义输入图像的宽高
-# 原始论文输入图像宽高为192，这里扩大2.75倍
-IMAGE_HEIGHT = 528
-IMAGE_WIDTH = 528
+# 原始论文输入图像宽高为192
+IMAGE_HEIGHT = 192
+IMAGE_WIDTH = 192
 
 # 输入的图像
 images = []
@@ -24,14 +24,45 @@ images = []
 # ---------
 
 # 定义皮层模型的神经元个数，神经元为2维排布
-# 原始论文的神经元个数为24*24，这里扩大2.75倍
-CORTIAL_WIDTH = 66
-CORTIAL_HEIGHT = 66
+# 原始论文的神经元个数为36*36
+CORTIAL_WIDTH_COUNT = 36
+CORTIAL_HEIGHT_COUNT = 36
 
 # 每个神经元在图像上的感受野宽高
-RECEPTIVE_FIELD_WIDTH = 8
-RECEPTIVE_FIELD_HEIGHT = 8
+# 原始论文的感受野大小为24*24
+RECEPTIVE_FIELD_WIDTH = 24
+RECEPTIVE_FIELD_HEIGHT = 24
 
+# 计算得出宽度方向上，每个神经元在输入图片上，感受野的起始宽度坐标
+# 图片的最小坐标为0，最大坐标为IMAGE_WIDTH-1
+# CORTIAL_WIDTH个神经元的起始坐标需要平摊在宽度坐标上，第一个神经元的起始坐标为0，第二个神经元的起始坐标为k，
+# 第三个神经元的起始坐标为2k，以此类推，直到最后一个神经元的感受野起始坐标为(RECEPTIVE_FIELD_WIDTH-1)*k
+# 计算出不考虑取整的k
+k1 = (IMAGE_WIDTH - RECEPTIVE_FIELD_WIDTH) / (CORTIAL_WIDTH_COUNT - 1)
+# 保存横向上每个神经元的感受野起始坐标
+receptive_field_start_width = []
+# 计算出不考虑取整情况下的起始坐标
+for i in range(CORTIAL_WIDTH_COUNT):
+    temp_start_width = i * k1
+    # 四舍五入取整
+    temp_start_width = round(temp_start_width)
+    # 检查是否越界，如果越界则取最大值
+    temp_start_width = min(temp_start_width, IMAGE_WIDTH - RECEPTIVE_FIELD_WIDTH)
+    receptive_field_start_width.append(temp_start_width)
+
+
+# 对高度方向上的感受野起始坐标也做同样计算
+k2 = (IMAGE_HEIGHT - RECEPTIVE_FIELD_HEIGHT) / (CORTIAL_HEIGHT_COUNT - 1)
+receptive_field_start_height = []
+for i in range(CORTIAL_HEIGHT_COUNT):
+    temp_start_height = i * k2
+    temp_start_height = round(temp_start_height)
+    temp_start_height = min(temp_start_height, IMAGE_HEIGHT - RECEPTIVE_FIELD_HEIGHT)
+    receptive_field_start_height.append(temp_start_height)
+
+# 将保存下来的坐标都转换成pytorch里的向量
+receptive_field_x = torch.Tensor(receptive_field_start_width)
+receptive_field_y = torch.Tensor(receptive_field_start_height)
 
 # --------
 # 模型实现
@@ -39,14 +70,15 @@ RECEPTIVE_FIELD_HEIGHT = 8
 
 
 class CortexNetwork(nn.Module):
-    def __init__(self, cortial_width, cortial_height, afferent_weights
+    def __init__(self, cortial_x_count, cortial_y_count, afferent_weights,
                  ex_lateral_weight_init, in_lateral_weight_init, gamma_e, gamma_i, alpha_A, alpha_E, alpha_I):
         super(CortexNetwork, self).__init__()
-        self.cortial_width = cortial_width
-        self.cortial_height = cortial_height
+        self.cortial_x_count = cortial_x_count
+        self.cortial_y_count = cortial_y_count
         
-        # 前向连接权重的形状是(1, 宽方向神经元数量, 高方向神经元数量, )
-        self.afferent_weights = afferent_weights
+        # 前向连接权重的形状是(1, 宽方向神经元数量, 高方向神经元数量, 感受野宽, 感受野高)
+        self.afferent_weights = nn.Parameter(afferent_weights)
+
 
         self.lateral_weights_excitatory = nn.Parameter(ex_lateral_weight_init)  # 初始化兴奋性侧向权重
         self.lateral_weights_inhibitory = nn.Parameter(in_lateral_weight_init)  # 初始化抑制性侧向权重
@@ -61,6 +93,29 @@ class CortexNetwork(nn.Module):
     def forward(self, input, prev_activity):
         # 计算传入激活
         
+        # 传入激活的大小为 通道数 * 神经元宽方向个数 * 神经元高方向个数
+        # 本论文涉及的模型采用灰度图像为输入，因此通道数为1
+        afferent_activation = torch.zeros(1 * self.cortial_x_count, self.cortial_y_count)
+
+
+        for i in range(CORTIAL_WIDTH_COUNT):
+            for j in range(CORTIAL_HEIGHT_COUNT):
+                receptive_field = input[:, receptive_field_x[i]:receptive_field_x[i]+RECEPTIVE_FIELD_WIDTH,
+                                         receptive_field_y[j]:receptive_field_y[j]+RECEPTIVE_FIELD_HEIGHT]
+                # 在这里，每个神经元的"加权平均池化"参数是独立的，因此需要调用afferent_weights[:,i,j]来获取每个神经元在其感受野中的加权平均池化参数
+                # 然后再计算出afferent_activation[i][j]的值
+                afferent_activation[:,i,j] = torch.sum(receptive_field * self.afferent_weights[:,i,j])
+
+            
+
+        # 计算侧向激活
+        lateral_activation_excitatory = F.linear(prev_activity, self.lateral_weights_excitatory)
+        lateral_activation_inhibitory = F.linear(prev_activity, self.lateral_weights_inhibitory)
+        
+        # 计算总激活
+        total_activation = afferent_activation + self.gamma_e * lateral_activation_excitatory + self.gamma_i * lateral_activation_inhibitory
+        activity = self.sigmoid_approximation(total_activation)
+
         
         # 计算侧向激活
         lateral_activation_excitatory = F.linear(prev_activity, self.lateral_weights_excitatory)
