@@ -1,6 +1,8 @@
 import os
 import argparse
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 
 import frogtools
@@ -30,17 +32,62 @@ CORTIAL_HEIGHT = 66
 RECEPTIVE_FIELD_WIDTH = 8
 RECEPTIVE_FIELD_HEIGHT = 8
 
-# 从图像（视网膜神经节细胞，RGC）到皮层可看作一个连接层，感受野大小为前面定义的感受野宽高相乘
-# 此处定义的是图像到皮层的连接层的权重，权重应该为一个PyTorch里的向量，其大小应该为 神经元层宽 * 神经元层高 * 感受野宽 * 感受野高
-# 初始值设置为0到1之间的随机float32
-afferent_weight = torch.rand(CORTIAL_WIDTH * CORTIAL_HEIGHT * RECEPTIVE_FIELD_WIDTH * RECEPTIVE_FIELD_HEIGHT).float()
+
+# --------
+# 模型实现
+# --------
 
 
-# 定义兴奋侧向连接权重
-exitatory_lateral_weight = torch.rand(CORTIAL_WIDTH * CORTIAL_HEIGHT * CORTIAL_WIDTH * CORTIAL_HEIGHT).float()
+class CortexNetwork(nn.Module):
+    def __init__(self, cortial_width, cortial_height, 
+                 ex_lateral_weight_init, in_lateral_weight_init, gamma_e, gamma_i, alpha_A, alpha_E, alpha_I):
+        super(CortexNetwork, self).__init__()
+        self.cortial_width = cortial_width
+        self.cortial_height = cortial_height
 
-# 定义抑制侧向连接权重
-intibiory_lateral_weight = torch.rand(CORTIAL_WIDTH * CORTIAL_HEIGHT * CORTIAL_WIDTH * CORTIAL_HEIGHT).float()
+
+        self.lateral_weights_excitatory = nn.Parameter(ex_lateral_weight_init)  # 初始化兴奋性侧向权重
+        self.lateral_weights_inhibitory = nn.Parameter(in_lateral_weight_init)  # 初始化抑制性侧向权重
+        self.gamma_e = gamma_e  # 兴奋性侧向连接的缩放因子
+        self.gamma_i = gamma_i  # 抑制性侧向连接的缩放因子
+        
+        self.alpha_A = alpha_A  # 传入连接的学习率
+        self.alpha_E = alpha_E  # 兴奋性连接的学习率
+        self.alpha_I = alpha_I  # 抑制性连接的学习率
+
+    
+    def forward(self, input, prev_activity):
+        # 计算传入激活
+        
+        
+        # 计算侧向激活
+        lateral_activation_excitatory = F.linear(prev_activity, self.lateral_weights_excitatory)
+        lateral_activation_inhibitory = F.linear(prev_activity, self.lateral_weights_inhibitory)
+        
+        # 计算总激活
+        total_activation = afferent_activation + self.gamma_e * lateral_activation_excitatory + self.gamma_i * lateral_activation_inhibitory
+        activity = self.sigmoid_approximation(total_activation)  # 使用逐段线性Sigmoid近似
+        
+        return activity
+    
+    def sigmoid_approximation(self, x):
+        # 实现逐段线性Sigmoid近似函数
+        return torch.clamp(x, min=0)  # 这里只是一个简单的ReLU作为示例
+    
+    def update_weights(self, presynaptic_activity, postsynaptic_activity):
+        # Hebbian权重更新规则
+        weight_change_afferent = self.alpha_A * torch.ger(presynaptic_activity, postsynaptic_activity)
+        self.afferent_weights.data += weight_change_afferent
+        self.afferent_weights.data /= self.afferent_weights.data.sum(0, keepdim=True)  # 归一化
+        
+        # 更新侧向连接权重
+        weight_change_lateral_excitatory = self.alpha_E * torch.ger(postsynaptic_activity, postsynaptic_activity)
+        self.lateral_weights_excitatory.data += weight_change_lateral_excitatory
+        self.lateral_weights_excitatory.data /= self.lateral_weights_excitatory.data.sum(0, keepdim=True)  # 归一化
+        
+        weight_change_lateral_inhibitory = self.alpha_I * torch.ger(postsynaptic_activity, postsynaptic_activity)
+        self.lateral_weights_inhibitory.data += weight_change_lateral_inhibitory
+        self.lateral_weights_inhibitory.data /= self.lateral_weights_inhibitory.data.sum(0, keepdim=True)  # 归一化
 
 
 
@@ -57,12 +104,11 @@ if __name__ == "__main__":
     elif args.type == 'folder':
         images = frogtools.get_images_from_folder('images', IMAGE_WIDTH, IMAGE_HEIGHT, output_format='torch')
     
+    # 初始化前向连接和侧向连接的权重
+    
     
     # 遍历所有图片
     for _ in range(len(images)):
         current_image = images[_]
 
-        # 计算当前图片输入下，皮层神经元的输出（不含侧向连接影响）
-        # 计算公式为：神经元输出 = 图像中该神经元对应的感受野 * 到皮层连接权重
-        # 神经元在行或是列上的个数和图像宽高，分别都对应8倍关系，所以第i行第j列的神经元应该对应图像中(i-1)*8+1到i*8行，(j-1)*8+1到j*8列的像素
         
