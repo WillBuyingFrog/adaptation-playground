@@ -12,9 +12,10 @@ import frogtools
 # --------
 
 # 定义输入图像的宽高
-# 原始论文输入图像宽高为192
+# 原始论文输入图像宽高为192，并且为灰度图片
 IMAGE_HEIGHT = 192
 IMAGE_WIDTH = 192
+IMAGE_CHANNELS = 1
 
 # 输入的图像
 images = []
@@ -80,8 +81,8 @@ class CortexNetwork(nn.Module):
         self.afferent_weights = nn.Parameter(afferent_weights)
 
 
-        self.lateral_weights_excitatory = nn.Parameter(ex_lateral_weight_init)  # 初始化兴奋性侧向权重
-        self.lateral_weights_inhibitory = nn.Parameter(in_lateral_weight_init)  # 初始化抑制性侧向权重
+        self.excitatory_latertal_weights = nn.Parameter(ex_lateral_weight_init)  # 初始化兴奋性侧向权重
+        self.inhibitory_lateral_weights = nn.Parameter(in_lateral_weight_init)  # 初始化抑制性侧向权重
         self.gamma_e = gamma_e  # 兴奋性侧向连接的缩放因子
         self.gamma_i = gamma_i  # 抑制性侧向连接的缩放因子
         
@@ -95,7 +96,7 @@ class CortexNetwork(nn.Module):
         
         # 传入激活的大小为 通道数 * 神经元宽方向个数 * 神经元高方向个数
         # 本论文涉及的模型采用灰度图像为输入，因此通道数为1
-        afferent_activation = torch.zeros(1 * self.cortial_x_count, self.cortial_y_count)
+        afferent_activation = torch.zeros(IMAGE_CHANNELS, self.cortial_x_count, self.cortial_y_count)
 
 
         for i in range(CORTIAL_WIDTH_COUNT):
@@ -109,21 +110,25 @@ class CortexNetwork(nn.Module):
             
 
         # 计算侧向激活
-        lateral_activation_excitatory = F.linear(prev_activity, self.lateral_weights_excitatory)
-        lateral_activation_inhibitory = F.linear(prev_activity, self.lateral_weights_inhibitory)
-        
-        # 计算总激活
-        total_activation = afferent_activation + self.gamma_e * lateral_activation_excitatory + self.gamma_i * lateral_activation_inhibitory
-        activity = self.sigmoid_approximation(total_activation)
+        # 兴奋侧向激活权重的形状为 (神经元宽方向个数 * 神经元高方向个数 * 神经元宽方向个数 * 神经元高方向个数)
+        # 兴奋侧向激活权重表示为E_ch_i_j_m_n，代表第ch个通道下，对(i,j)位置的神经元来说，(m,n)与他的兴奋侧向连接的权重
+        # 兴奋侧向激活结果的形状为（神经元宽方向个数 * 神经元高方向个数）
+        # 兴奋侧向激活结果表示为 EI_ch_m_n，代表第ch个通道下，(m,n)位置的神经元的兴奋侧向连接的结果，这个结果后面会加在神经元前向输出上，作为总激活的一部分
+        excitatory_lateral_activation = torch.zeros(IMAGE_CHANNELS, self.cortial_x_count, self.cortial_y_count)
+        for i in range(CORTIAL_WIDTH_COUNT):
+            for j in range(CORTIAL_HEIGHT_COUNT):
+                excitatory_lateral_activation[:,i,j] = torch.sum(prev_activity[:,i,j] * self.excitatory_latertal_weights[:,i,j])
+
+        # 抑制侧向激活权重的计算方法同理
+        inhibitory_lateral_activation = torch.zeros(IMAGE_CHANNELS, self.cortial_x_count, self.cortial_y_count)
+        for i in range(CORTIAL_WIDTH_COUNT):
+            for j in range(CORTIAL_HEIGHT_COUNT):
+                inhibitory_lateral_activation[i,j] = torch.sum(prev_activity[:,i,j] * self.inhibitory_lateral_weights[:,i,j])
 
         
-        # 计算侧向激活
-        lateral_activation_excitatory = F.linear(prev_activity, self.lateral_weights_excitatory)
-        lateral_activation_inhibitory = F.linear(prev_activity, self.lateral_weights_inhibitory)
-        
         # 计算总激活
-        total_activation = afferent_activation + self.gamma_e * lateral_activation_excitatory + self.gamma_i * lateral_activation_inhibitory
-        activity = self.sigmoid_approximation(total_activation)  # 使用逐段线性Sigmoid近似
+        total_activation = afferent_activation + self.gamma_e * excitatory_lateral_activation + self.gamma_i * inhibitory_lateral_activation
+        activity = self.sigmoid_approximation(total_activation)
         
         return activity
     
@@ -131,20 +136,14 @@ class CortexNetwork(nn.Module):
         # 实现逐段线性Sigmoid近似函数
         return torch.clamp(x, min=0)  # 这里只是一个简单的ReLU作为示例
     
+    # TODO 这个函数写得不对，需要重写
     def update_weights(self, presynaptic_activity, postsynaptic_activity):
         # Hebbian权重更新规则
         weight_change_afferent = self.alpha_A * torch.ger(presynaptic_activity, postsynaptic_activity)
         self.afferent_weights.data += weight_change_afferent
         self.afferent_weights.data /= self.afferent_weights.data.sum(0, keepdim=True)  # 归一化
         
-        # 更新侧向连接权重
-        weight_change_lateral_excitatory = self.alpha_E * torch.ger(postsynaptic_activity, postsynaptic_activity)
-        self.lateral_weights_excitatory.data += weight_change_lateral_excitatory
-        self.lateral_weights_excitatory.data /= self.lateral_weights_excitatory.data.sum(0, keepdim=True)  # 归一化
         
-        weight_change_lateral_inhibitory = self.alpha_I * torch.ger(postsynaptic_activity, postsynaptic_activity)
-        self.lateral_weights_inhibitory.data += weight_change_lateral_inhibitory
-        self.lateral_weights_inhibitory.data /= self.lateral_weights_inhibitory.data.sum(0, keepdim=True)  # 归一化
 
 
 
