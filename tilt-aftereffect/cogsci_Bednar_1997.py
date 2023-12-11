@@ -39,12 +39,14 @@ RECEPTIVE_FIELD_HEIGHT = 8
 
 
 class CortexNetwork(nn.Module):
-    def __init__(self, cortial_width, cortial_height, 
+    def __init__(self, cortial_width, cortial_height, afferent_weights
                  ex_lateral_weight_init, in_lateral_weight_init, gamma_e, gamma_i, alpha_A, alpha_E, alpha_I):
         super(CortexNetwork, self).__init__()
         self.cortial_width = cortial_width
         self.cortial_height = cortial_height
-
+        
+        # 前向连接权重的形状是(1, 宽方向神经元数量, 高方向神经元数量, )
+        self.afferent_weights = afferent_weights
 
         self.lateral_weights_excitatory = nn.Parameter(ex_lateral_weight_init)  # 初始化兴奋性侧向权重
         self.lateral_weights_inhibitory = nn.Parameter(in_lateral_weight_init)  # 初始化抑制性侧向权重
