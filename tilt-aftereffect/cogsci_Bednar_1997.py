@@ -137,7 +137,7 @@ class CortexNetwork(nn.Module):
         return torch.clamp(x, min=0)  # 这里只是一个简单的ReLU作为示例
     
     # TODO 这个函数写得不对，需要重写
-    def update_weights(self):
+    def update_weights(self, activity):
 
         # 更新前向连接权重
         for i in range(CORTIAL_WIDTH_COUNT):
@@ -148,6 +148,17 @@ class CortexNetwork(nn.Module):
                 afferent_sum = torch.sum(self.afferent_weights[:,i,j]) + self.alpha_A * torch.sum(torch.mul(receptive_field, self.afferent_weights[:,i,j]))
                 self.afferent_weights[:,i,j] += self.aplha_A * torch.mul(receptive_field, self.afferent_weights[:,i,j])
                 self.afferent_weights[:,i,j] /= afferent_sum
+        
+        # 更新侧向连接权重
+        for i in range(CORTIAL_HEIGHT_COUNT):
+            for j in range(CORTIAL_WIDTH_COUNT):
+                excitatory_sum = torch.sum(self.excitatory_latertal_weights[:,i,j]) + self.alpha_E * torch.sum(activity[i,j] * activity)
+                self.excitatory_latertal_weights[:,i,j] += self.alpha_E * activity[i,j] * activity
+                self.excitatory_latertal_weights[:,i,j] /= excitatory_sum
+
+                inhibitory_sum = torch.sum(self.inhibitory_lateral_weights[:,i,j]) + self.alpha_I * torch.sum(activity[i,j] * activity)
+                self.inhibitory_lateral_weights[:,i,j] += self.alpha_I * activity[i,j] * activity
+                self.inhibitory_lateral_weights[:,i,j] /= inhibitory_sum
         
         
         
