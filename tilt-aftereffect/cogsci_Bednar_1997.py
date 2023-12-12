@@ -4,17 +4,25 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import matplotlib.pyplot as plt
 
 import frogtools
+
+
+# --------
+# 调试参数
+# --------
+DEBUG_SWITCH = True
+
 
 # --------
 # 图像参数
 # --------
 
 # 定义输入图像的宽高
-# 原始论文输入图像宽高为192，并且为灰度图片
-IMAGE_HEIGHT = 192
-IMAGE_WIDTH = 192
+# 原始论文输入图像宽高为36，并且为灰度图片
+IMAGE_HEIGHT = 36
+IMAGE_WIDTH = 36
 IMAGE_CHANNELS = 1
 
 # 输入的图像
@@ -65,6 +73,19 @@ for i in range(CORTIAL_HEIGHT_COUNT):
 receptive_field_x = torch.Tensor(receptive_field_start_width)
 receptive_field_y = torch.Tensor(receptive_field_start_height)
 
+# 每个神经元的侧向连接mask
+ex_lateral_mask = torch.zeros((CORTIAL_WIDTH_COUNT, CORTIAL_HEIGHT_COUNT, CORTIAL_WIDTH_COUNT, CORTIAL_HEIGHT_COUNT))
+in_lateral_mask = torch.zeros((CORTIAL_WIDTH_COUNT, CORTIAL_HEIGHT_COUNT, CORTIAL_WIDTH_COUNT, CORTIAL_HEIGHT_COUNT))
+
+# 超参数
+gamma_e = 0.9
+gamma_i = 0.9
+
+alpha_A = 0.007
+alpha_E = 0.0002
+alpha_I = 0.000025
+
+
 # --------
 # 模型实现
 # --------
@@ -72,7 +93,8 @@ receptive_field_y = torch.Tensor(receptive_field_start_height)
 
 class CortexNetwork(nn.Module):
     def __init__(self, cortial_x_count, cortial_y_count, afferent_weights,
-                 ex_lateral_weight_init, in_lateral_weight_init, gamma_e, gamma_i, alpha_A, alpha_E, alpha_I):
+                 ex_lateral_weight_init, in_lateral_weight_init, ex_lateral_mask, in_lateral_mask,
+                 gamma_e, gamma_i, alpha_A, alpha_E, alpha_I):
         super(CortexNetwork, self).__init__()
         self.cortial_x_count = cortial_x_count
         self.cortial_y_count = cortial_y_count
@@ -83,6 +105,10 @@ class CortexNetwork(nn.Module):
 
         self.excitatory_latertal_weights = nn.Parameter(ex_lateral_weight_init)  # 初始化兴奋性侧向权重
         self.inhibitory_lateral_weights = nn.Parameter(in_lateral_weight_init)  # 初始化抑制性侧向权重
+        self.ex_lateral_mask = ex_lateral_mask # 每个神经元的兴奋侧向连接mask
+        self.in_lateral_mask = in_lateral_mask # 每个神经元的抑制侧向连接mask
+        
+
         self.gamma_e = gamma_e  # 兴奋性侧向连接的缩放因子
         self.gamma_i = gamma_i  # 抑制性侧向连接的缩放因子
         
@@ -136,7 +162,7 @@ class CortexNetwork(nn.Module):
         # 实现逐段线性Sigmoid近似函数
         return torch.clamp(x, min=0)  # 这里只是一个简单的ReLU作为示例
     
-    # TODO 这个函数写得不对，需要重写
+
     def update_weights(self, activity):
 
         # 更新前向连接权重
@@ -153,14 +179,14 @@ class CortexNetwork(nn.Module):
         for i in range(CORTIAL_HEIGHT_COUNT):
             for j in range(CORTIAL_WIDTH_COUNT):
                 excitatory_sum = torch.sum(self.excitatory_latertal_weights[:,i,j]) + self.alpha_E * torch.sum(activity[i,j] * activity)
-                self.excitatory_latertal_weights[:,i,j] += self.alpha_E * activity[i,j] * activity
+                self.excitatory_latertal_weights[:,i,j] += self.alpha_E * activity[i,j] * activity * self.ex_lateral_mask[i,j]
                 self.excitatory_latertal_weights[:,i,j] /= excitatory_sum
 
                 inhibitory_sum = torch.sum(self.inhibitory_lateral_weights[:,i,j]) + self.alpha_I * torch.sum(activity[i,j] * activity)
-                self.inhibitory_lateral_weights[:,i,j] += self.alpha_I * activity[i,j] * activity
+                self.inhibitory_lateral_weights[:,i,j] += self.alpha_I * activity[i,j] * activity * self.in_lateral_mask[i,j]
                 self.inhibitory_lateral_weights[:,i,j] /= inhibitory_sum
         
-        
+
         
         
 
@@ -179,11 +205,54 @@ if __name__ == "__main__":
     elif args.type == 'folder':
         images = frogtools.get_images_from_folder('images', IMAGE_WIDTH, IMAGE_HEIGHT, output_format='torch')
     
-    # 初始化前向连接和侧向连接的权重
+    # 初始化前向连接权重，前向连接权重的形状为(channels, cortial_x_count, cortial_y_count, receptive_field_width, receptive_field_height)
+    # 这里channels为1，因为输入图像为灰度图像
+    # 初始值为0到1的float32随机数
+    afferent_weights = torch.rand((IMAGE_CHANNELS, CORTIAL_WIDTH_COUNT, CORTIAL_HEIGHT_COUNT, RECEPTIVE_FIELD_WIDTH, RECEPTIVE_FIELD_HEIGHT)).float()
     
-    
+    # 初始化侧向连接权重，不论是兴奋侧向连接还是抑制侧向连接，形状均为(channels, cortial_x_count, cortial_y_count, cortial_x_count, cortial_y_count)
+    # 初始值均为0
+    ex_lateral_weight = torch.zeros((IMAGE_CHANNELS, CORTIAL_WIDTH_COUNT, CORTIAL_HEIGHT_COUNT, CORTIAL_WIDTH_COUNT, CORTIAL_HEIGHT_COUNT)).float()
+    in_lateral_weight = torch.zeros((IMAGE_CHANNELS, CORTIAL_WIDTH_COUNT, CORTIAL_HEIGHT_COUNT, CORTIAL_WIDTH_COUNT, CORTIAL_HEIGHT_COUNT)).float()
+
+    # 为每个神经元填充初始侧向连接权重
+    grid_x, grid_y = torch.meshgrid(torch.arange(CORTIAL_WIDTH_COUNT), torch.arange(CORTIAL_HEIGHT_COUNT), indexing='ij')
+
+    for i in range(CORTIAL_WIDTH_COUNT):
+        for j in range(CORTIAL_HEIGHT_COUNT):
+            # 对每个神经元而言，只有与其距离为6及以内的神经元才能与他产生侧向连接
+            dist = torch.sqrt((grid_x - i) ** 2 + (grid_y - j) ** 2)
+            mask_excitatory = dist <= 19.0
+            mask_inhibitory = dist <= 47.0
+            # 将mask的值可视化
+            if i==5 and j==5:
+                plt.imshow(mask_excitatory)
+                plt.show()
+
+            ex_lateral_mask[i,j] = mask_excitatory
+            in_lateral_mask[i,j] = mask_inhibitory
+            ex_coordinates = torch.nonzero(ex_lateral_mask, as_tuple=False)
+            in_coordinates = torch.nonzero(in_lateral_mask, as_tuple=False)
+            for x, y in ex_coordinates:
+                ex_lateral_weight[:,i,j,x,y] = torch.rand(1).item()
+            for x, y in in_coordinates:
+                ex_lateral_weight[:,i,j,x,y] = torch.rand(1).item()
+
+    cortex_model = CortexNetwork(cortial_x_count=CORTIAL_WIDTH_COUNT,
+                                 cortial_y_count=CORTIAL_HEIGHT_COUNT,
+                                 afferent_weights=afferent_weights,
+                                 ex_lateral_weight_init=ex_lateral_weight,
+                                 in_lateral_weight_init=in_lateral_weight,
+                                 ex_lateral_mask=ex_lateral_mask,
+                                 in_lateral_mask=in_lateral_mask,
+                                 gamma_e=gamma_e, gamma_i=gamma_i,
+                                 alpha_A=alpha_A, alpha_E=alpha_E, alpha_I=alpha_I
+
+    )
+
     # 遍历所有图片
     for _ in range(len(images)):
         current_image = images[_]
+        current_image = torch.tensor(current_image).unsqueeze(0).float()
 
         

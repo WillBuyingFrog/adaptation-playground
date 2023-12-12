@@ -78,6 +78,7 @@ def get_images_from_video(video_name, image_width, image_height, output_format='
         ret_images = np.array(ret_images)
     elif output_format == 'torch':
         # 将图像列表转换为torch数组并返回
+        ret_images = np.array(ret_images)
         ret_images = torch.tensor(ret_images).permute(0, 3, 1, 2).float()
 
     return ret_images
