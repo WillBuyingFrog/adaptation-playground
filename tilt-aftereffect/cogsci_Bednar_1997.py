@@ -123,11 +123,11 @@ class CortexNetwork(nn.Module):
         inhibitory_lateral_activation = torch.zeros(IMAGE_CHANNELS, self.cortial_x_count, self.cortial_y_count)
         for i in range(CORTIAL_WIDTH_COUNT):
             for j in range(CORTIAL_HEIGHT_COUNT):
-                inhibitory_lateral_activation[i,j] = torch.sum(prev_activity[:,i,j] * self.inhibitory_lateral_weights[:,i,j])
+                inhibitory_lateral_activation[:,i,j] = torch.sum(prev_activity[:,i,j] * self.inhibitory_lateral_weights[:,i,j])
 
         
         # 计算总激活
-        total_activation = afferent_activation + self.gamma_e * excitatory_lateral_activation + self.gamma_i * inhibitory_lateral_activation
+        total_activation = afferent_activation + self.gamma_e * excitatory_lateral_activation - self.gamma_i * inhibitory_lateral_activation
         activity = self.sigmoid_approximation(total_activation)
         
         return activity
@@ -137,11 +137,19 @@ class CortexNetwork(nn.Module):
         return torch.clamp(x, min=0)  # 这里只是一个简单的ReLU作为示例
     
     # TODO 这个函数写得不对，需要重写
-    def update_weights(self, presynaptic_activity, postsynaptic_activity):
-        # Hebbian权重更新规则
-        weight_change_afferent = self.alpha_A * torch.ger(presynaptic_activity, postsynaptic_activity)
-        self.afferent_weights.data += weight_change_afferent
-        self.afferent_weights.data /= self.afferent_weights.data.sum(0, keepdim=True)  # 归一化
+    def update_weights(self):
+
+        # 更新前向连接权重
+        for i in range(CORTIAL_WIDTH_COUNT):
+            for j in range(CORTIAL_HEIGHT_COUNT):
+                receptive_field = input[:, receptive_field_x[i]:receptive_field_x[i]+RECEPTIVE_FIELD_WIDTH,
+                                            receptive_field_y[j]:receptive_field_y[j]+RECEPTIVE_FIELD_HEIGHT]
+                
+                afferent_sum = torch.sum(self.afferent_weights[:,i,j]) + self.alpha_A * torch.sum(torch.mul(receptive_field, self.afferent_weights[:,i,j]))
+                self.afferent_weights[:,i,j] += self.aplha_A * torch.mul(receptive_field, self.afferent_weights[:,i,j])
+                self.afferent_weights[:,i,j] /= afferent_sum
+        
+        
         
         
 
