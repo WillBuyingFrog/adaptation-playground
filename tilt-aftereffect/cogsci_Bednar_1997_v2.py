@@ -174,4 +174,13 @@ class CortexModel(nn.Module):
                 inhibitory_lateral_activation[:,i,j] = old_activation_padding[:,i-47:i+47,j-47:j+47] * self.in_lateral_weight * self.inhibitory_lateral_mask
 
         
-        
+        new_activation[:, 47:47+self.cortex_x_count, 47:47+self.cortex_y_count] = new_activation[:, 47:47+self.cortex_x_count, 47:47+self.cortex_y_count]
+        + self.gamma_e * excitatory_lateral_activation - self.gamma_i * inhibitory_lateral_activation
+
+        self.activation = new_activation[:, 47:47+self.cortex_x_count, 47:47+self.cortex_y_count]
+
+        return self.activation
+    
+
+    def update_weigths():
+        pass

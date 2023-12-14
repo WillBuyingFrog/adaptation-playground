@@ -23,7 +23,7 @@ h, w = 100, 100
 
 # 定义区域
 regions = []
-# 每个区域的起始左上角坐标之间需要分别隔开h和w
+# 每个区域的起始左上角坐标之间需要分别隔开一定的值
 for i in range(0, IMAGE_HEIGHT - h, 25):
     for j in range(0, IMAGE_WIDTH - w, 25):
         regions.append((j, i, w, h))
@@ -140,7 +140,7 @@ if __name__ == '__main__':
     for i in range(1, image_count):
 
         # 计算至多过去十张图片的平均值
-        current_average = get_weighted_average_image(max(i-10, 0), i, i % 10 == 0)
+        current_average = get_weighted_average_image(max(i-10, 0), i, i % 10 == 0 and DEBUG_SWITCH)
 
         diffs = np.zeros((len(regions), ), dtype=np.float32)
 
