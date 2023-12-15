@@ -121,8 +121,11 @@ class CortexModel(nn.Module):
         self.cortex_y_count = cortex_y_count
         self.image_channels = image_channels
         
+        # 所有神经元的前向权重，形状为（channels, cortex_x_count, cortex_y_count, rf_width, rf_height）
         self.afferent_weights = nn.Parameter(afferent_weights)
+        # 所有神经元的兴奋侧向权重，形状为（channels, cortex_x_count, cortex_y_count, 2 * 19 + 1, 2 * 19 + 1）
         self.ex_lateral_weight = nn.Parameter(ex_lateral_weight_init)
+        # 所有神经元的抑制侧向权重，形状为（channels, cortex_x_count, cortex_y_count, 2 * 47 + 1, 2 * 47 + 1）
         self.in_lateral_weight = nn.Parameter(in_lateral_weight_init)
 
         self.afferent_mask = afferent_mask
@@ -166,12 +169,12 @@ class CortexModel(nn.Module):
         excitatory_lateral_activation = torch.zeros((self.image_channels, self.cortex_x_count, self.cortex_y_count)).float()
         for i in range(self.cortex_x_count):
             for j in range(self.cortex_y_count):
-                excitatory_lateral_activation[:,i,j] = old_activation_padding[:,i-19:i+19,j-19:j+19] * self.ex_lateral_weight * self.excitatory_lateral_mask
+                excitatory_lateral_activation[:,i,j] = old_activation_padding[:,i-19:i+19,j-19:j+19] * self.ex_lateral_weight[:,i,j] * self.excitatory_lateral_mask
         
         inhibitory_lateral_activation = torch.zeros((self.image_channels, self.cortex_x_count, self.cortex_y_count)).float()
         for i in range(self.cortex_x_count):
             for j in range(self.cortex_y_count):
-                inhibitory_lateral_activation[:,i,j] = old_activation_padding[:,i-47:i+47,j-47:j+47] * self.in_lateral_weight * self.inhibitory_lateral_mask
+                inhibitory_lateral_activation[:,i,j] = old_activation_padding[:,i-47:i+47,j-47:j+47] * self.in_lateral_weight[:,i,j] * self.inhibitory_lateral_mask
 
         
         new_activation[:, 47:47+self.cortex_x_count, 47:47+self.cortex_y_count] = new_activation[:, 47:47+self.cortex_x_count, 47:47+self.cortex_y_count]
@@ -196,8 +199,8 @@ class CortexModel(nn.Module):
         # 更新侧向连接权重
         for i in range(self.cortex_x_count):
             for j in range(self.cortex_y_count):
-                activation_padding = torch.zeros((self.image_channels, 47 + self.cortex_x_count + 47,
-                                                  47 + self.cortex_y_count + 47)).float()
-                activation_padding[:, 47:47+self.cortex_x_count, 47:47+self.cortex_y_count] = self.activation.copy()
+                activation_padding = torch.zeros((self.image_channels, 19+self.cortex_x_count+19,
+                                                  19+self.cortex_y_count+19)).float()
+                activation_padding[:, 19:19+self.cortex_x_count, 19:19+self.cortex_y_count] = self.activation.copy()
 
-                excitatory_lateral_sum = torch.sum()
+                excitatory_lateral_sum = torch.sum(self.ex_lateral_radius[:,i,j]) + self.alpha_E * torch.sum(self.activation[:,i,j] * activation_padding[:,])
