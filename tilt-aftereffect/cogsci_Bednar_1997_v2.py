@@ -182,5 +182,22 @@ class CortexModel(nn.Module):
         return self.activation
     
 
-    def update_weigths():
-        pass
+    def update_weigths(self, input):
+        
+        # 更新前向连接权重
+        for i in range(self.cortex_x_count):
+            for j in range(self.cortex_y_count):
+                receptive_field = input[:, self.cortex_rf_start[i, j, 0]:self.cortex_rf_start[i, j, 0] + RECEPTIVE_FIELD_WIDTH,
+                                        self.cortex_rf_start[i, j, 1]:self.cortex_rf_start[i, j, 1] + RECEPTIVE_FIELD_HEIGHT]
+                afferent_sum = torch.sum(self.afferent_weights[:,i,j]) + self.alpha_A * torch.sum(receptive_field * self.afferent_mask * self.activation[:,i,j])
+                self.afferent_weights[:,i,j] += self.alpha_A * (receptive_field * self.afferent_mask * self.activation[:,i,j])
+                self.afferent_weights[:,i,j] /= afferent_sum
+
+        # 更新侧向连接权重
+        for i in range(self.cortex_x_count):
+            for j in range(self.cortex_y_count):
+                activation_padding = torch.zeros((self.image_channels, 47 + self.cortex_x_count + 47,
+                                                  47 + self.cortex_y_count + 47)).float()
+                activation_padding[:, 47:47+self.cortex_x_count, 47:47+self.cortex_y_count] = self.activation.copy()
+
+                excitatory_lateral_sum = torch.sum()
