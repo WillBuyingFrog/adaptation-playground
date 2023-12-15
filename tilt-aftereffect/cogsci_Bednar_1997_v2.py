@@ -129,6 +129,10 @@ class CortexModel(nn.Module):
         self.in_lateral_weight = nn.Parameter(in_lateral_weight_init)
 
         self.afferent_mask = afferent_mask
+        # 每个神经元的ex_lateral_weight并不总发挥作用，对特定的(i,j)位置神经元来说，某些位置是不合法的
+        # 例如对于(0,0)位置的神经元来说，ex_lateral_weight[:,0,0]只有右下四分之一的部分是有效的
+        # excitatory_lateral_mask[:,i,j]记录了对(i,j)位置的神经元来说，哪些部分的weight是有效的。有效为1，否则为0
+        # excitatory_lateral_mask的形状为(channels, cortex_x_count, cortex_y_count, 2 * 19 + 1, 2 * 19 + 1)
         self.excitatory_lateral_mask = ex_lateral_mask
         self.inhibitory_lateral_mask = in_lateral_mask
         # self.cortex_lateral_mask = cortex_lateral_mask
@@ -151,6 +155,7 @@ class CortexModel(nn.Module):
     
     def forward(self, input):
         
+        # 为了神经元侧向连接计算方便，给神经元activation赋值前，存储新激活值的向量需要在上下左右分别加padding
         new_activation = torch.zeros((self.image_channels, 47+self.cortex_x_count+47,
                                      47+self.cortex_y_count+47)).float()
         
@@ -169,17 +174,19 @@ class CortexModel(nn.Module):
         excitatory_lateral_activation = torch.zeros((self.image_channels, self.cortex_x_count, self.cortex_y_count)).float()
         for i in range(self.cortex_x_count):
             for j in range(self.cortex_y_count):
-                excitatory_lateral_activation[:,i,j] = old_activation_padding[:,i-19:i+19,j-19:j+19] * self.ex_lateral_weight[:,i,j] * self.excitatory_lateral_mask
+                ac_i, ac_j = i + 47, j + 47
+                # pytorch取向量区间左闭右开
+                excitatory_lateral_activation[:,i,j] = old_activation_padding[:,ac_i-19:ac_i+20,ac_j-19:ac_j+20] * self.ex_lateral_weight[:,i,j] * self.excitatory_lateral_mask
         
         inhibitory_lateral_activation = torch.zeros((self.image_channels, self.cortex_x_count, self.cortex_y_count)).float()
         for i in range(self.cortex_x_count):
             for j in range(self.cortex_y_count):
-                inhibitory_lateral_activation[:,i,j] = old_activation_padding[:,i-47:i+47,j-47:j+47] * self.in_lateral_weight[:,i,j] * self.inhibitory_lateral_mask
+                ac_i, ac_j = i + 47, j + 47
+                inhibitory_lateral_activation[:,i,j] = old_activation_padding[:,ac_i-47:ac_i+48,ac_j-47:ac_j+48] * self.in_lateral_weight[:,i,j] * self.inhibitory_lateral_mask
 
-        
-        new_activation[:, 47:47+self.cortex_x_count, 47:47+self.cortex_y_count] = new_activation[:, 47:47+self.cortex_x_count, 47:47+self.cortex_y_count]
-        + self.gamma_e * excitatory_lateral_activation - self.gamma_i * inhibitory_lateral_activation
-
+        # 计算侧向连接
+        new_activation[:, 47:47+self.cortex_x_count, 47:47+self.cortex_y_count] += self.gamma_e * excitatory_lateral_activation - self.gamma_i * inhibitory_lateral_activation
+        # 将计算好的新激活值应用到网络本身的activation变量中
         self.activation = new_activation[:, 47:47+self.cortex_x_count, 47:47+self.cortex_y_count]
 
         return self.activation
@@ -197,10 +204,40 @@ class CortexModel(nn.Module):
                 self.afferent_weights[:,i,j] /= afferent_sum
 
         # 更新侧向连接权重
+        activation_padding = torch.zeros((self.image_channels, 47+self.cortex_x_count+47,
+                                                  47+self.cortex_y_count+47)).float()
+        activation_padding[:, 47:47+self.cortex_x_count, 47:47+self.cortex_y_count] = self.activation.copy()
         for i in range(self.cortex_x_count):
             for j in range(self.cortex_y_count):
-                activation_padding = torch.zeros((self.image_channels, 19+self.cortex_x_count+19,
-                                                  19+self.cortex_y_count+19)).float()
-                activation_padding[:, 19:19+self.cortex_x_count, 19:19+self.cortex_y_count] = self.activation.copy()
+                ac_i, ac_j = i+47, j+47
+                excitatory_lateral_sum = torch.sum(self.ex_lateral_weight[:,i,j]) + self.alpha_E * torch.sum(self.activation[:,i,j] * activation_padding[:,ac_i-19:ac_i+20,ac_j-19:ac_j+20])
+                self.ex_lateral_weight[:,i,j] += self.alpha_E * (self.activation[:,i,j] 
+                                                                 * activation_padding[:,ac_i-19:ac_i+20,ac_j-19:ac_j+20] 
+                                                                 * self.excitatory_lateral_mask[:,i,j])
+                self.ex_lateral_weight[:,i,j] /= excitatory_lateral_sum
 
-                excitatory_lateral_sum = torch.sum(self.ex_lateral_radius[:,i,j]) + self.alpha_E * torch.sum(self.activation[:,i,j] * activation_padding[:,])
+                # 同理计算抑制神经元连接的权重
+                inhibitory_lateral_sum = torch.sum(self.in_lateral_weight[:,i,j]) + self.alpha_I * torch.sum(self.activation[:,i,j] * activation_padding[:,ac_i-47:ac_i+48,ac_j-47:ac_j+48])
+                self.in_lateral_weight[:,i,j] += self.alpha_I * (self.activation[:,i,j] 
+                                                                 * activation_padding[:,ac_i-47:ac_i+48,ac_j-47:ac_j+48] 
+                                                                 * self.inhibitory_lateral_mask[:,i,j])
+                self.in_lateral_weight[:,i,j] /= inhibitory_lateral_sum
+        
+
+# --------
+# 模型实现
+# --------
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--type', type=str, default='video', help="Input images source. 'video' for video, 'folder' for images in the 'images' subfolder.")
+    parser.add_argument('--video_name', type=str, default='video.mp4', help='video name')
+
+    args = parser.parse_args()
+
+    if args.type == 'video':
+        images = frogtools.get_images_from_video(args.video_name, IMAGE_WIDTH, IMAGE_HEIGHT, output_format='torch')
+    elif args.type == 'folder':
+        images = frogtools.get_images_from_folder('images', IMAGE_WIDTH, IMAGE_HEIGHT, output_format='torch')
+
+    
